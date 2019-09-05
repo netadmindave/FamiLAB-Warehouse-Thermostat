@@ -16,6 +16,7 @@ const int buildingCompressor = 7;
 //------------------------------i2c LCD-------------------------------
 
 #include <LiquidCrystal_I2C.h>
+
 LiquidCrystal_I2C lcd(0x27,16,2);
 
 //---------------------------------HTU21D---------------------------------
@@ -51,11 +52,9 @@ int currentRunTime = 0;
 
 //----------------------------interupt functions-------------------------
 
-
 void stopState() {
     countdown = 0;
 }
-
 
 void startState() {
     countdown = countdownStart;
