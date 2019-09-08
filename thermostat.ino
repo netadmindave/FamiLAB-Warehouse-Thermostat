@@ -6,17 +6,16 @@ const int eepromAddress = 0;
 
 //----------------------------define pins----------------------------
 
-const int startButton = 2;
-const int stopButton = 3;
-const int wallFan = 4;
-const int wallCompressor = 5;
-const int buildingFan = 6;
-const int buildingCompressor = 7;
+const int startButton = D3;
+const int stopButton = D4;
+const int wallFan = D7;
+const int wallCompressor = D6;
+const int buildingFan = D5;
+const int buildingCompressor = D0;
 
 //------------------------------i2c LCD-------------------------------
 
 #include <LiquidCrystal_I2C.h>
-
 LiquidCrystal_I2C lcd(0x27,16,2);
 
 //---------------------------------HTU21D---------------------------------
@@ -29,7 +28,7 @@ Adafruit_HTU21DF htu = Adafruit_HTU21DF();
 //----------------------------Global Variables----------------------------
 
 //temp related
-float temp;
+float temp; 
 float rel_hum;
 int targetTemp = 78;
 
@@ -41,21 +40,26 @@ int airConditionerStatus = 0;
 //timers
 int countdown;
 const int countdownStart = 7200; // in seconds
-int startupDelay = 300; //in seconds
+int delayTimer = 300; //in seconds
 int fanTime = 0;
 int compressorTime = 0;
 int compressorDelay = 300; // in seconds
 int fanDelay = 300; // in seconds
-int totalRunTime;
-const int loopTime = 865; //in milliseconds
-int currentRunTime = 0;
+long totalRunTime;
+const int loopTime = 854; //in milliseconds
+int writeTimer = 0;
+long storedRunTime;
+int writeTriggerTime = 400;
+int endCountdownWrite = 0;
 
 //----------------------------interupt functions-------------------------
 
+void ICACHE_RAM_ATTR stopState();
 void stopState() {
     countdown = 0;
 }
 
+void ICACHE_RAM_ATTR startState();
 void startState() {
     countdown = countdownStart;
 }
@@ -63,7 +67,7 @@ void startState() {
 //----------------------------LCD Display-------------------------
 
 void lcdDisplay() {
-    if(countdown == 7200){
+    if(countdown == 7200 && delayTimer == 0){
         lcd.clear();
         lcd.setCursor(0,0);
         lcd.print("SET: ");
@@ -80,7 +84,7 @@ void lcdDisplay() {
         lcd.setCursor(15,1);
         lcd.print("s");
     }
-    if(countdown < 7200 && countdown > 0){
+    if(countdown < 7200 && countdown > 0 && delayTimer == 0){
         lcd.setCursor(11,0);
         lcd.print("     ");
         lcd.setCursor(11,0);
@@ -90,17 +94,41 @@ void lcdDisplay() {
         lcd.setCursor(11,1);
         lcd.print(countdown);
     }
-    if(countdown == 0){
+    if(countdown == 0 || delayTimer > 0){
         lcd.setCursor(0,0);
         lcd.print("TEMP:   HUMID:       ");
         lcd.setCursor(5,0);
         lcd.print(temp,0);
         lcd.setCursor(14,0);
         lcd.print(rel_hum,0);
-        lcd.setCursor(0,1);
-        lcd.print("AC OFF  RT:    H");
-        lcd.setCursor(11,1);
-        lcd.print(totalRunTime/3600);
+        if(compressorTime == 0 && delayTimer == 0){
+            lcd.setCursor(0,1);
+            lcd.print("AC OFF   RT:    ");
+        }
+        if(compressorTime > 0){
+            lcd.setCursor(0,1);
+            lcd.print("DELAY:   RT:    ");
+            lcd.setCursor(6,1);
+            lcd.print(compressorTime);
+        }
+        if(delayTimer > 0){
+            lcd.setCursor(0,1);
+            lcd.print("DELAY:   RT:    ");
+            lcd.setCursor(6,1);
+            lcd.print(delayTimer);
+        }
+        if(totalRunTime/3600 < 16){
+            lcd.setCursor(12,1);
+            lcd.print(totalRunTime/60);
+            lcd.setCursor(15,1);
+            lcd.print("M");
+        }else{
+            lcd.setCursor(12,1);
+            lcd.print(totalRunTime/3600);
+            lcd.setCursor(15,1);
+            lcd.print("H");
+        }
+        
     }
   
 }
@@ -115,25 +143,29 @@ void setup() {
     //temp sensor
     if (!htu.begin()) {
         Serial.println("Couldn't find sensor!");
-        while (1);
+        while (1){
+            delay(1000);
+            lcd.init();                     
+            lcd.backlight();
+            lcd.clear();
+            lcd.setCursor(2,0);
+            lcd.print("TEMP SENSOR");
+            lcd.setCursor(3,1);
+            lcd.print("NOT FOUND");
+        }
     }
+    
   
     //buttons and interupts
     pinMode(stopButton, INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(stopButton), stopState, CHANGE);
     pinMode(startButton, INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(startButton), startState, CHANGE);
-  
+
     //lcd
     lcd.init();                     
     lcd.backlight();
     lcd.clear();
-    lcd.setCursor(1,0);
-    lcd.print("STARTUP DELAY");
-    lcd.setCursor(2,1);
-    lcd.print("DELAY: ");
-    lcd.setCursor(10,1);
-    lcd.print(startupDelay);
   
     //Set pin mode
     pinMode(wallFan, OUTPUT);
@@ -146,23 +178,17 @@ void setup() {
     digitalWrite(wallCompressor, HIGH);
     digitalWrite(buildingFan, HIGH);
     digitalWrite(buildingCompressor, HIGH);
-  
-    Serial.println("start delay");
-    //delay to not kill compressor on start up
-    for (startupDelay; startupDelay > 0; startupDelay--) {
-        Serial.println(startupDelay);
-        lcd.setCursor(10,1);
-        lcd.print("      ");
-        lcd.setCursor(10,1);
-        lcd.print(startupDelay);
-        delay(1000);
-    }
 
     //EEPROM
-    totalRunTime = EEPROM.read(eepromAddress);
-    if(totalRunTime <= 0){
-        EEPROM.write(eepromAddress, 1);
+    EEPROM.begin(512);
+    EEPROM.get(eepromAddress, storedRunTime);
+    if(storedRunTime <= 0){
+        EEPROM.put(eepromAddress, 10);
+        EEPROM.commit();
+        Serial.println("wrote to eeprom");
     }
+    totalRunTime = storedRunTime;
+    compressorTime = delayTimer; 
 }
 
 //---------------------------------Main Loop--------------------------------
@@ -171,10 +197,10 @@ void loop() {
     delay(loopTime);
     
     //---------Read Temp-------
-    
+
     temp = (((htu.readTemperature()*9)/5)+32);
     rel_hum = htu.readHumidity();
-  
+
     //--------Display Status on LCD-----------
   
     lcdDisplay();
@@ -188,7 +214,39 @@ void loop() {
     if (compressorTime > 0){
         compressorTime--;
     }
-      
+
+    //decrement delay time
+    if (delayTimer > 0){
+        delayTimer--;
+       return;
+    }
+
+    //decrement countdown
+    if(countdown > 0 && delayTimer == 0){
+        countdown--;
+    }
+
+    //compare temperature
+    if (targetTemp < temp){
+        if (countdown > 0 && delayTimer == 0){
+            airConditionerStatus = 1;
+        }
+    }else{
+        airConditionerStatus = 0;
+    }
+
+    //turn on the air conditioner
+    if (1 == airConditionerStatus && countdown > 0 && 0 == compressorTime && compressorStatus == 0){
+        digitalWrite(wallFan, LOW);
+        digitalWrite(wallCompressor, LOW);
+        digitalWrite(buildingFan, LOW);
+        digitalWrite(buildingCompressor, LOW);
+        compressorTime = (compressorDelay);
+        fanStatus = 1;
+        compressorStatus = 1;
+        Serial.println("AC ON");
+    }
+
     //turn off the compressor and start the timer
     if (0 == compressorTime && 1 == compressorStatus && 0 == airConditionerStatus){
         digitalWrite(wallCompressor, HIGH);
@@ -205,60 +263,44 @@ void loop() {
         digitalWrite(buildingFan, HIGH);
         fanStatus = 0; 
         Serial.println("Fan OFF");
+        if(endCountdownWrite == 1){
+            writeTimer = 0;
+            endCountdownWrite == 0;
+            EEPROM.put(eepromAddress, totalRunTime);
+            EEPROM.commit();
+        }
     }
       
     //start the shutdown process when the 2 hours is over
     if (0 == countdown){
         airConditionerStatus = 0;
+        endCountdownWrite = 1;
         Serial.println("Out of Time. Please Insert Coin to Continue");
     }
-      
-    //turn on the air conditioner
-    if (1 == airConditionerStatus && countdown > 0 && 0 == compressorTime && compressorStatus == 0){
-        digitalWrite(wallFan, LOW);
-        digitalWrite(wallCompressor, LOW);
-        digitalWrite(buildingFan, LOW);
-        digitalWrite(buildingCompressor, LOW);
-        compressorTime = (compressorDelay);
-        fanStatus = 1;
-        compressorStatus = 1;
-        Serial.println("AC ON");
-    }
-      
-    //compare temperature
-    if (targetTemp < temp){
-        if (countdown > 0){
-            airConditionerStatus = 1;
-        }
-    }else{
-        airConditionerStatus = 0;
-    }
-    
-    
-    if(countdown > 0){
-        countdown--;
-    }
-
-    //add runtime every 20 min of run time
+       
+    //add runtime to EEPROM
     if(fanStatus == 1){
-        currentRunTime++;
-        if(currentRunTime == 1200){
-            totalRunTime = totalRunTime + currentRunTime;
-            currentRunTime = 0;
-            EEPROM.update(eepromAddress, totalRunTime);
+        writeTimer++;
+        totalRunTime++;
+        if(writeTimer == writeTriggerTime){
+            writeTimer = 0;
+            EEPROM.put(eepromAddress, totalRunTime);
+            EEPROM.commit();
         }    
     }
 
-    
+    EEPROM.get(eepromAddress, storedRunTime);
     //display all variables
-    Serial.print("Temp: "); Serial.print(temp); Serial.println(" F");
+    Serial.print("Temp: "); Serial.print(temp); Serial.println("F");
     Serial.print("Humidity: "); Serial.print(rel_hum); Serial.println("%");
-    Serial.print("Countdown: ");Serial.print(countdown);Serial.println(" s");
+    Serial.print("Countdown: ");Serial.print(countdown);Serial.println("s");
     Serial.print("AC Status: ");Serial.println(airConditionerStatus);
     Serial.print("Compressor Status: ");Serial.println(compressorStatus);
-    Serial.print("Compressor Time: ");Serial.print(compressorTime);Serial.println(" s");
+    Serial.print("Compressor Time: ");Serial.print(compressorTime);Serial.println("s");
     Serial.print("Fan Status: ");Serial.println(fanStatus);
     Serial.print("Fan Time: ");Serial.print(fanTime);Serial.println("s");
-    Serial.print("Total Run Time: ");Serial.print(totalRunTime);Serial.print(" s  or ");Serial.print(totalRunTime/3600);Serial.println(" h");
+    Serial.print("Total Run Time: ");Serial.print(totalRunTime);Serial.print("s  or ");Serial.print(totalRunTime/3600);Serial.println("h");
+    Serial.print("Write Timer: ");Serial.print(writeTimer);Serial.println("s");
+    Serial.print("EEPROM Value: ");Serial.println(storedRunTime);
     Serial.println("-----------------------------------------------");
 }
