@@ -1,1 +1,1 @@
-# FamiLAB-Warhouse-thermostat
+# FamiLAB-Warehouse-Thermostat
