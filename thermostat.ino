@@ -41,24 +41,26 @@ int airConditionerStatus = 0;
 int countdown;
 const int countdownStart = 7200; // in seconds
 int delayTimer = 300; //in seconds
-int fanTime = 0;
-int compressorTime = 0;
+int fanTime = 0; //for countdown to shutoff the fan
+int compressorTime = 0; //for countdown to change state on the compressor
 int compressorDelay = 300; // in seconds
 int fanDelay = 300; // in seconds
-long totalRunTime;
+long totalRunTime; //running total of seconds the fan and compresssor is running
 const int loopTime = 854; //in milliseconds
-int writeTimer = 0;
-long storedRunTime;
-int writeTriggerTime = 400;
-int endCountdownWrite = 0;
+int writeTimer = 0; //count between writes to the eeprom
+long storedRunTime; //value from eeprom
+int writeTriggerTime = 400; //delay between eeprom writes
+int endCountdownWrite = 0; //make sure the eeprom is updated during shutdown
 
 //----------------------------interupt functions-------------------------
 
+//esp8266 requires this for interupts
 void ICACHE_RAM_ATTR stopState();
 void stopState() {
     countdown = 0;
 }
 
+//esp8266 requires this for interupts
 void ICACHE_RAM_ATTR startState();
 void startState() {
     countdown = countdownStart;
@@ -236,7 +238,7 @@ void loop() {
     }
 
     //turn on the air conditioner
-    if (1 == airConditionerStatus && countdown > 0 && 0 == compressorTime && compressorStatus == 0){
+    if (airConditionerStatus == 1 && countdown > 0 && compressorTime == 0 && compressorStatus == 0){
         digitalWrite(wallFan, LOW);
         digitalWrite(wallCompressor, LOW);
         digitalWrite(buildingFan, LOW);
@@ -248,7 +250,7 @@ void loop() {
     }
 
     //turn off the compressor and start the timer
-    if (0 == compressorTime && 1 == compressorStatus && 0 == airConditionerStatus){
+    if (compressorTime == 0 && compressorStatus == 1 && airConditionerStatus == 0){
         digitalWrite(wallCompressor, HIGH);
         digitalWrite(buildingCompressor, HIGH);
         compressorStatus = 0;
@@ -258,21 +260,21 @@ void loop() {
     }
       
     //turn off the fan
-    if (0 == compressorStatus && 0 == fanTime && 1 == fanStatus && 0 == airConditionerStatus){
+    if (compressorStatus == 0 && fanTime == 0 && fanStatus == 1 && airConditionerStatus == 0){
         digitalWrite(wallFan, HIGH);
         digitalWrite(buildingFan, HIGH);
         fanStatus = 0; 
         Serial.println("Fan OFF");
         if(endCountdownWrite == 1){
             writeTimer = 0;
-            endCountdownWrite == 0;
+            endCountdownWrite = 0;
             EEPROM.put(eepromAddress, totalRunTime);
             EEPROM.commit();
         }
     }
       
     //start the shutdown process when the 2 hours is over
-    if (0 == countdown){
+    if (countdown == 0){
         airConditionerStatus = 0;
         endCountdownWrite = 1;
         Serial.println("Out of Time. Please Insert Coin to Continue");
